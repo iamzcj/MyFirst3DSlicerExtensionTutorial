@@ -5,6 +5,7 @@ import slicer
 import vtk
 from slicer.ScriptedLoadableModule import *
 from slicer.util import VTKObservationMixin
+from slicer.util import updateTableFromArray
 
 #
 # LineIntensityProfile
@@ -135,10 +136,12 @@ class LineIntensityProfileWidget(ScriptedLoadableModuleWidget, VTKObservationMix
         # These connections ensure that whenever user changes some settings on the GUI, that is saved in the MRML scene
         # (in the selected parameter node).
         self.ui.inputSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
-        self.ui.outputSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
-        self.ui.imageThresholdSliderWidget.connect("valueChanged(double)", self.updateParameterNodeFromGUI)
-        self.ui.invertOutputCheckBox.connect("toggled(bool)", self.updateParameterNodeFromGUI)
-        self.ui.invertedOutputSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        self.ui.rulerSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        self.ui.rulerResolutionSliderWidget.connect("valueChanged(double)", self.updateParameterNodeFromGUI)
+        self.ui.tableSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        self.ui.seriesSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        self.ui.chartSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        # self.ui.invertOutputCheckBox.connect("toggled(bool)", self.updateParameterNodeFromGUI)
 
         # Buttons
         self.ui.applyButton.connect('clicked(bool)', self.onApplyButton)
@@ -231,13 +234,15 @@ class LineIntensityProfileWidget(ScriptedLoadableModuleWidget, VTKObservationMix
 
         # Update node selectors and sliders
         self.ui.inputSelector.setCurrentNode(self._parameterNode.GetNodeReference("InputVolume"))
-        self.ui.outputSelector.setCurrentNode(self._parameterNode.GetNodeReference("OutputVolume"))
-        self.ui.invertedOutputSelector.setCurrentNode(self._parameterNode.GetNodeReference("OutputVolumeInverse"))
-        self.ui.imageThresholdSliderWidget.value = float(self._parameterNode.GetParameter("Threshold"))
-        self.ui.invertOutputCheckBox.checked = (self._parameterNode.GetParameter("Invert") == "true")
+        self.ui.rulerSelector.setCurrentNode(self._parameterNode.GetNodeReference("Ruler"))
+        self.ui.rulerResolutionSliderWidget.value = float(self._parameterNode.GetParameter("Resolution"))
+        self.ui.tableSelector.setCurrentNode(self._parameterNode.GetNodeReference("Table"))
+        self.ui.seriesSelector.setCurrentNode(self._parameterNode.GetNodeReference("Series"))
+        self.ui.chartSelector.setCurrentNode(self._parameterNode.GetNodeReference("Chart"))
+        # self.ui.invertOutputCheckBox.checked = (self._parameterNode.GetParameter("Invert") == "true")
 
         # Update buttons states and tooltips
-        if self._parameterNode.GetNodeReference("InputVolume") and self._parameterNode.GetNodeReference("OutputVolume"):
+        if self._parameterNode.GetNodeReference("InputVolume") and self._parameterNode.GetNodeReference("Ruler"):
             self.ui.applyButton.toolTip = "Compute output volume"
             self.ui.applyButton.enabled = True
         else:
@@ -259,10 +264,12 @@ class LineIntensityProfileWidget(ScriptedLoadableModuleWidget, VTKObservationMix
         wasModified = self._parameterNode.StartModify()  # Modify all properties in a single batch
 
         self._parameterNode.SetNodeReferenceID("InputVolume", self.ui.inputSelector.currentNodeID)
-        self._parameterNode.SetNodeReferenceID("OutputVolume", self.ui.outputSelector.currentNodeID)
-        self._parameterNode.SetParameter("Threshold", str(self.ui.imageThresholdSliderWidget.value))
-        self._parameterNode.SetParameter("Invert", "true" if self.ui.invertOutputCheckBox.checked else "false")
-        self._parameterNode.SetNodeReferenceID("OutputVolumeInverse", self.ui.invertedOutputSelector.currentNodeID)
+        self._parameterNode.SetNodeReferenceID("Ruler", self.ui.rulerSelector.currentNodeID)
+        self._parameterNode.SetParameter("Resolution", str(self.ui.rulerResolutionSliderWidget.value))
+        self._parameterNode.SetNodeReferenceID("Table", self.ui.tableSelector.currentNodeID)
+        self._parameterNode.SetNodeReferenceID("Series", self.ui.seriesSelector.currentNodeID)
+        self._parameterNode.SetNodeReferenceID("Chart", self.ui.chartSelector.currentNodeID)
+        # self._parameterNode.SetParameter("Invert", "true" if self.ui.invertOutputCheckBox.checked else "false")
 
         self._parameterNode.EndModify(wasModified)
 
@@ -273,14 +280,15 @@ class LineIntensityProfileWidget(ScriptedLoadableModuleWidget, VTKObservationMix
         with slicer.util.tryWithErrorDisplay("Failed to compute results.", waitCursor=True):
 
             # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(),
-                               self.ui.imageThresholdSliderWidget.value, self.ui.invertOutputCheckBox.checked)
+            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.rulerSelector.currentNode(), self.ui.rulerResolutionSliderWidget.value)
 
+            """
             # Compute inverted output (if needed)
             if self.ui.invertedOutputSelector.currentNode():
                 # If additional output volume is selected then result with inverted threshold is written there
                 self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
-                                   self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
+                                   self.ui.rulerResolutionSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
+            """
 
 
 #
@@ -307,12 +315,14 @@ class LineIntensityProfileLogic(ScriptedLoadableModuleLogic):
         """
         Initialize parameter node with default settings.
         """
-        if not parameterNode.GetParameter("Threshold"):
-            parameterNode.SetParameter("Threshold", "100.0")
+        if not parameterNode.GetParameter("Resolution"):
+            parameterNode.SetParameter("Resolution", "100.0")
         if not parameterNode.GetParameter("Invert"):
             parameterNode.SetParameter("Invert", "false")
 
-    def process(self, inputVolume, outputVolume, imageThreshold, invert=False, showResult=True):
+
+
+    def process(self, inputVolume, ruler, resolution):
         """
         Run the processing algorithm.
         Can be used without GUI widget.
@@ -323,26 +333,136 @@ class LineIntensityProfileLogic(ScriptedLoadableModuleLogic):
         :param showResult: show output volume in slice viewers
         """
 
-        if not inputVolume or not outputVolume:
-            raise ValueError("Input or output volume is invalid")
+        if not inputVolume or not ruler:
+            raise ValueError("Input volume or ruler is invalid")
 
         import time
         startTime = time.time()
         logging.info('Processing started')
 
-        # Compute the thresholded output volume using the "Threshold Scalar Volume" CLI module
-        cliParams = {
-            'InputVolume': inputVolume.GetID(),
-            'OutputVolume': outputVolume.GetID(),
-            'ThresholdValue': imageThreshold,
-            'ThresholdType': 'Above' if invert else 'Below'
-        }
-        cliNode = slicer.cli.run(slicer.modules.thresholdscalarvolume, None, cliParams, wait_for_completion=True, update_display=showResult)
-        # We don't need the CLI module node anymore, remove it to not clutter the scene with it
-        slicer.mrmlScene.RemoveNode(cliNode)
+        point_ijk = [165, 60, 103]
+
+        import numpy as np
+
+        volumeArray = slicer.util.arrayFromVolume(inputVolume)
+        value = volumeArray[point_ijk[2]][point_ijk[1]][point_ijk[0]]
+        value2 = volumeArray[point_ijk[2], point_ijk[1], point_ijk[0]]
+        print(f"point {point_ijk} values {value}")
+        print(f"point {point_ijk} values {value2}")
+        print(f"{resolution =}")
+
+        sampleValues, distanceValues = self.probeVolume(inputVolume, ruler, resolution)
 
         stopTime = time.time()
         logging.info(f'Processing completed in {stopTime-startTime:.2f} seconds')
+
+        self.plotLineIntensity(distanceValues, sampleValues)
+
+    
+    def plotLineIntensity(self, distanceValues, sampleValues):
+        import numpy as np
+        distanceValues = np.reshape(distanceValues, (-1, 1))
+        sampleValues = np.reshape(sampleValues, (-1, 1))
+        # print(f"{distanceValues =}")
+        # print(f"{sampleValues =}")
+        arr = np.append(distanceValues, sampleValues, axis=1)
+        # print(f"{arr =}")
+
+        parameterNode = self.getParameterNode()
+        rulerNode = parameterNode.GetNodeReference("Ruler")
+        rulerName = rulerNode.GetName()
+        rulerColor = rulerNode.GetDisplayNode().GetSelectedColor()
+        print(f"{rulerColor =}")
+
+        # tableNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLTableNode")
+        tableNode = parameterNode.GetNodeReference("Table")
+        if not tableNode:
+            # Save results to a new table node
+            tableNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTableNode", f"Table_{rulerName}")
+        updateTableFromArray(tableNode, arr)
+        tableNode.GetTable().GetColumn(0).SetName("Distance")
+        tableNode.GetTable().GetColumn(1).SetName("Intensity")
+        parameterNode.SetNodeReferenceID("Table", tableNode.GetID())
+
+        # Create plot
+        # plotSeriesNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLPlotSeriesNode")
+        plotSeriesNode = parameterNode.GetNodeReference("Series")
+        if not plotSeriesNode:
+            plotSeriesNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLPlotSeriesNode", f"Series_{rulerName}")
+        plotSeriesNode.SetAndObserveTableNodeID(tableNode.GetID())
+        plotSeriesNode.SetXColumnName("Distance")
+        plotSeriesNode.SetYColumnName("Intensity")
+        plotSeriesNode.SetPlotType(plotSeriesNode.PlotTypeScatter)
+        # plotSeriesNode.SetColor(0, 0.6, 1.0)
+        plotSeriesNode.SetColor(rulerColor)
+        parameterNode.SetNodeReferenceID("Series", plotSeriesNode.GetID())
+
+        # Create chart and add plot
+        # plotChartNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLPlotChartNode")
+        plotChartNode = parameterNode.GetNodeReference("Chart")
+        if not plotChartNode:
+            plotChartNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLPlotChartNode", f"Chart_{rulerName}")
+        plotChartNode.AddAndObservePlotSeriesNodeID(plotSeriesNode.GetID())
+        # plotChartNode.YAxisRangeAutoOff()
+        # plotChartNode.SetYAxisRange(0, 500000)
+        parameterNode.SetNodeReferenceID("Chart", plotChartNode.GetID())
+
+        # Show plot in layout
+        slicer.modules.plots.logic().ShowChartInLayout(plotChartNode)
+        """
+        """
+
+
+    def probeVolume(self,volumeNode,rulerNode,resolution):
+        import math
+        import numpy as np
+        resolution = int(resolution)
+
+        # get ruler endpoints coordinates in RAS
+        p0ras = [0, 0, 0]
+        rulerNode.GetNthControlPointPosition(0, p0ras)
+        p0ras = [*p0ras, 1.0]
+        p1ras = [0, 0, 0]
+        rulerNode.GetNthControlPointPosition(1, p1ras)
+        p1ras = [*p1ras, 1.0]
+
+        print(f"{p0ras =}")
+        print(f"{p1ras =}")
+        length = math.sqrt((p0ras[0]-p1ras[0])**2+(p0ras[1]-p1ras[1])**2+(p0ras[2]-p1ras[2])**2)
+        distanceValues = np.linspace(0, length, num=resolution+1)
+        print(f"{length =}")
+        # print(f"{distanceValues =}")
+        
+        # convert RAS to IJK coordinates of the vtkImageData
+        ras2ijk = vtk.vtkMatrix4x4()
+        volumeNode.GetRASToIJKMatrix(ras2ijk)
+        p0ijk = [int(round(c)) for c in ras2ijk.MultiplyPoint(p0ras)[:3]]
+        p1ijk = [int(round(c)) for c in ras2ijk.MultiplyPoint(p1ras)[:3]]
+        print(f"{p0ijk =}")
+        print(f"{p1ijk =}")
+
+        # create VTK line that will be used for sampling
+        line = vtk.vtkLineSource()
+        line.SetResolution(resolution)
+        line.SetPoint1(p0ijk[0], p0ijk[1], p0ijk[2])
+        line.SetPoint2(p1ijk[0], p1ijk[1], p1ijk[2])
+        
+        # create VTK probe filter and sample the image
+        probe = vtk.vtkProbeFilter()
+        probe.SetInputConnection(line.GetOutputPort())
+        probe.SetSourceData(volumeNode.GetImageData())
+        probe.Update()
+
+        sample = probe.GetOutput().GetPointData().GetArray('ImageScalars')
+        nDataPoints = sample.GetNumberOfTuples()
+        sampleValues = [sample.GetTuple1(i) for i in range(nDataPoints)]
+        sampleValues = np.array(sampleValues)
+        # for i in range(nDataPoints):
+            # print(f"{i}: {sample.GetTuple1(i) =}")
+
+        # return VTK array
+        return sampleValues, distanceValues
+        # return probe.GetOutput().GetPointData().GetArray('ImageScalars')
 
 
 #
